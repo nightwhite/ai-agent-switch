@@ -32,6 +32,26 @@ export type ApplyClientConfigInput = {
   modelId: string;
 };
 
+export type ClientSlotTarget = {
+  slot: string;
+  providerId: string;
+  modelId: string;
+};
+
+export type ClientSlotConfig = {
+  slot: string;
+  provider: ProviderProfile;
+  modelId: string;
+};
+
+export type ApplyClientSlotsInput = {
+  slots: ClientSlotConfig[];
+};
+
+export type ClientCurrentSlotState = ClientSlotTarget & {
+  configPath: string;
+};
+
 export type PatchFile = {
   path: string;
   before?: string | undefined;
@@ -51,6 +71,7 @@ export interface ClientAdapter {
   detect(): Promise<ClientDetection>;
   readConfig(): Promise<unknown>;
   planApply(input: ApplyClientConfigInput): Promise<PatchPlan>;
+  planApplySlots?(input: ApplyClientSlotsInput): Promise<PatchPlan>;
   apply(plan: PatchPlan): Promise<void>;
   getCurrent(): Promise<ClientCurrentState>;
   validate(): Promise<ValidationResult>;

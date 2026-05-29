@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { BaseClientAdapter } from "./base";
-import type { ApplyClientConfigInput, ClientCurrentState, ClientId, PatchPlan } from "./types";
+import type { ApplyClientConfigInput, ApplyClientSlotsInput, ClientCurrentState, ClientId, PatchPlan } from "./types";
 import { parseJsonObject, readTextIfExists, recordAt, stringifyJson } from "./utils";
 import { normalizeProviderType, resolveModelType, type ProviderProfile, type ProviderType } from "../config/schema";
 
@@ -48,6 +48,38 @@ export class CowAgentAdapter extends BaseClientAdapter {
       ? { path: this.configPath, after: stringifyJson(config) }
       : { path: this.configPath, before, after: stringifyJson(config) };
     return { clientId: this.id, summary: `Switch CowAgent to ${input.provider.id}/${input.modelId}`, files: [file] };
+  }
+
+  async planApplySlots(input: ApplyClientSlotsInput): Promise<PatchPlan> {
+    const main = input.slots.find((slot) => slot.slot === "main");
+    if (!main) throw new Error("CowAgent requires main slot");
+    const fields = cowAgentProviderFields(resolveModelType(main.provider, main.modelId));
+    if (fields.apiBaseKey && !main.provider.baseUrl) {
+      throw new Error(`CowAgent requires a baseUrl for provider ${main.provider.id}`);
+    }
+
+    const before = await readTextIfExists(this.configPath);
+    const config = parseJsonObject(before);
+    config.model = main.modelId;
+    config.bot_type = fields.botType;
+    if (fields.apiBaseKey) config[fields.apiBaseKey] = main.provider.baseUrl;
+    if (fields.apiKeyKey) config[fields.apiKeyKey] = cowAgentApiKey(main.provider, fields);
+
+    const aiAgentSwitch = recordAt(config, "ai_agent_switch");
+    aiAgentSwitch.provider = main.provider.id;
+    aiAgentSwitch.model = main.modelId;
+    const slots = recordAt(aiAgentSwitch, "slots");
+    for (const slot of input.slots) {
+      slots[slot.slot] = {
+        provider: slot.provider.id,
+        model: slot.modelId,
+      };
+    }
+
+    const file = before === undefined
+      ? { path: this.configPath, after: stringifyJson(config) }
+      : { path: this.configPath, before, after: stringifyJson(config) };
+    return { clientId: this.id, summary: `Configure CowAgent model slots for ${main.provider.id}/${main.modelId}`, files: [file] };
   }
 
   async getCurrent(): Promise<ClientCurrentState> {

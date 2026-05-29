@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { BaseClientAdapter } from "./base";
-import type { ApplyClientConfigInput, ClientCurrentState, ClientId, PatchPlan } from "./types";
+import type { ApplyClientConfigInput, ApplyClientSlotsInput, ClientCurrentState, ClientId, PatchPlan } from "./types";
 import { parseJsoncObject, readTextIfExists, recordAt, stringifyJson } from "./utils";
 import { normalizeProviderType, resolveModelType, type ModelProfile, type ProviderProfile, type ProviderType } from "../config/schema";
 
@@ -50,6 +50,14 @@ export class OpenClawAdapter extends BaseClientAdapter {
       ? { path: this.configPath, after: stringifyJson(config) }
       : { path: this.configPath, before, after: stringifyJson(config) };
     return { clientId: this.id, summary: `Switch OpenClaw default model to ${input.provider.id}/${input.modelId}`, files: [file] };
+  }
+
+  async planApplySlots(input: ApplyClientSlotsInput): Promise<PatchPlan> {
+    if (input.slots.length !== 1 || input.slots[0]?.slot !== "main") {
+      throw new Error("OpenClaw currently supports only main model slot");
+    }
+    const slot = input.slots[0];
+    return this.planApply({ provider: slot.provider, modelId: slot.modelId });
   }
 
   async getCurrent(): Promise<ClientCurrentState> {

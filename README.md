@@ -221,16 +221,6 @@ ai-agent-switch provider init \
 
 `provider init` keeps AIProxy as one provider and stores each model's request API mode. Every `--model` must use `modelId:apiMode`; accepted API modes are `chat_completions`, `codex_responses`, and `anthropic_messages`.
 
-Agent Hub templates can initialize native client config from runtime environment variables:
-
-```bash
-ai-agent-switch agent-hub init --client hermes --from-env -y --json
-ai-agent-switch agent-hub init --client openclaw --from-env -y --json
-ai-agent-switch agent-hub init --client cowagent --from-env -y --json
-```
-
-The command reads `AGENT_MODEL_PROVIDER`, `AGENT_MODEL_BASEURL`, `AGENT_MODEL_APIKEY`, `AGENT_MODEL`, and `AGENT_MODEL_API_MODE`, then writes the selected client's native config. CowAgent still uses its native `OPEN_AI_API_KEY` env at runtime, so Agent Hub templates should continue to inject that env for CowAgent.
-
 Built-in presets:
 
 - `openrouter`
@@ -282,6 +272,14 @@ ai-agent-switch switch --client openclaw --provider aiproxy --dry-run --json
 ```
 
 When `--model` is omitted, `switch` uses the provider `defaultModel`. If no default model is configured, the command fails and asks for an explicit `--model`.
+
+Configure one or more named model slots for a client:
+
+```bash
+ai-agent-switch client configure --client cowagent --slot main=aiproxy/glm-5.1 -y --json
+```
+
+`client configure` atomically applies the requested named model slot configuration for the target client. The `main` slot is the default runtime model. Additional slots are client-specific and only affect runtime behavior when the client's adapter explicitly supports and consumes them.
 
 List supported clients without reading each current client config:
 

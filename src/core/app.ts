@@ -12,10 +12,10 @@ import {
   type ValidationResult,
 } from "../config/schema";
 import { createClientAdapters, type ClientAdapter, type ClientCurrentState, type ClientId, type PatchPlan } from "../clients";
+import type { ClientSlotConfig, ClientSlotTarget } from "../clients/types";
 import { ProviderRegistry, maskProvider } from "../providers/registry";
 import { testProviderConnectivity } from "../providers/connectivity";
 import { getProviderPreset, type ProviderPresetAddOptions } from "../providers/presets";
-import { resolveAgentHubEnv, type AgentHubEnvInput } from "./agent-hub-env";
 
 export type AiAgentSwitchAppOptions = ConfigStoreOptions & {
   cwd?: string;
@@ -36,6 +36,12 @@ export type SwitchClientInput = {
   clientId: ClientId;
   providerId: string;
   modelId?: string | undefined;
+  yes: boolean;
+};
+
+export type ConfigureClientInput = {
+  clientId: ClientId;
+  slots: ClientSlotTarget[];
   yes: boolean;
 };
 
@@ -68,46 +74,6 @@ export type UseAllClientItem =
 export type UseAllClientsResult = {
   applied: boolean;
   results: UseAllClientItem[];
-};
-
-export type AgentHubAvailableModel = {
-  id: string;
-  type: ProviderType;
-};
-
-export type InitAgentHubInput = {
-  clientId: ClientId;
-  providerId: string;
-  providerName: string;
-  baseUrl: string;
-  apiKeyEnv: string;
-  modelId: string;
-  modelType: ProviderType;
-  availableModels: AgentHubAvailableModel[];
-  yes: boolean;
-};
-
-export type InitAgentHubFromEnvInput = {
-  clientId: ClientId;
-  env: AgentHubEnvInput;
-  yes: boolean;
-};
-
-export type InitAgentHubResult = {
-  clientId: ClientId;
-  providerId: string;
-  modelId: string;
-  modelType: ProviderType;
-  providerType: ProviderType;
-  configPath: string;
-  applied: boolean;
-  requiresConfirmation: boolean;
-  plan: PatchPlan;
-};
-
-export type ApplyAgentHubPlanInput = InitAgentHubInput & {
-  providerType: ProviderType;
-  plan: PatchPlan;
 };
 
 export type AppStatus = {
@@ -437,6 +403,70 @@ export class AiAgentSwitchApp {
     });
   }
 
+  async configureClient(input: ConfigureClientInput): Promise<UseClientResult> {
+    if (input.slots.length === 0) {
+      throw new Error("Missing --slot");
+    }
+    if (input.slots.some((slot) => !slot.slot || !slot.providerId || !slot.modelId)) {
+      throw new Error("Invalid --slot; expected name=provider/model");
+    }
+    const duplicateSlot = firstDuplicate(input.slots.map((slot) => slot.slot));
+    if (duplicateSlot) {
+      throw new Error(`Duplicate slot: ${duplicateSlot}`);
+    }
+    const config = await this.store.load();
+    aiAgentSwitchConfigSchema.parse(config);
+    const slots: ClientSlotConfig[] = [];
+    for (const slot of input.slots) {
+      const provider = config.providers[slot.providerId];
+      if (!provider) throw new Error(`Provider not found: ${slot.providerId}`);
+      if (!provider.models.some((model) => model.id === slot.modelId)) {
+        throw new Error(`Model not found for provider ${provider.id}: ${slot.modelId}`);
+      }
+      slots.push({ slot: slot.slot, provider, modelId: slot.modelId });
+    }
+
+    const adapter = this.adapters.get(input.clientId);
+    if (!adapter) throw new Error(`Client not supported: ${input.clientId}`);
+    if (!adapter.planApplySlots && input.slots.length > 1) {
+      throw new Error(`Client ${input.clientId} does not support multiple model slots`);
+    }
+
+    if (!adapter.planApplySlots) {
+      const first = slots[0]!;
+      if (first.slot !== "main") {
+        throw new Error(`Client ${input.clientId} supports only main model slot`);
+      }
+      return this.applyClientSwitch({ clientId: input.clientId, provider: first.provider, modelId: first.modelId, yes: input.yes });
+    }
+
+    const validation = await adapter.validate();
+    if (!validation.ok && existsSync(adapter.configPath)) {
+      throw new Error(`Client config is invalid: ${validation.issues.join("; ")}`);
+    }
+
+    const plan = await adapter.planApplySlots({ slots });
+    if (!input.yes) {
+      return { applied: false, requiresConfirmation: true, plan };
+    }
+
+    const main = slots.find((slot) => slot.slot === "main");
+    if (!main) {
+      throw new Error("Missing main slot");
+    }
+    await adapter.apply(plan);
+    await this.stateStore.update((state) => {
+      state.lastSwitch = {
+        clientId: input.clientId,
+        providerId: main.provider.id,
+        modelId: main.modelId,
+        at: new Date().toISOString(),
+      };
+      return state;
+    });
+    return { applied: true, requiresConfirmation: false, plan };
+  }
+
   private async applyClientSwitch(input: {
     clientId: ClientId;
     provider: ProviderProfile;
@@ -466,117 +496,6 @@ export class AiAgentSwitchApp {
       return state;
     });
     return { applied: true, requiresConfirmation: false, plan };
-  }
-
-  async initAgentHub(input: InitAgentHubInput): Promise<InitAgentHubResult> {
-    const existingProvider = existsSync(this.store.configPath)
-      ? (await this.store.load()).providers[input.providerId]
-      : undefined;
-    const providerType = existingProvider?.type ?? "openai-chat-compatible";
-    const models = normalizeAgentHubModels(input.modelId, input.availableModels);
-    const provider = providerProfileSchema.parse({
-      id: input.providerId,
-      name: input.providerName,
-      type: providerType,
-      baseUrl: input.baseUrl,
-      apiKeyEnv: input.apiKeyEnv,
-      models,
-      defaultModel: input.modelId,
-    } satisfies ProviderProfile);
-
-    const adapter = this.adapters.get(input.clientId);
-    if (!adapter) throw new Error(`Client not supported: ${input.clientId}`);
-    const validation = await adapter.validate();
-    if (!validation.ok && existsSync(adapter.configPath)) {
-      throw new Error(`Client config is invalid: ${validation.issues.join("; ")}`);
-    }
-
-    const plan = await adapter.planApply({ provider, modelId: input.modelId });
-
-    if (!input.yes) {
-      return {
-        clientId: input.clientId,
-        providerId: provider.id,
-        modelId: input.modelId,
-        modelType: input.modelType,
-        providerType,
-        configPath: adapter.configPath,
-        applied: false,
-        requiresConfirmation: true,
-        plan,
-      };
-    }
-
-    return this.applyAgentHubPlan({
-      ...input,
-      providerType,
-      plan,
-    });
-  }
-
-  async initAgentHubFromEnv(input: InitAgentHubFromEnvInput): Promise<InitAgentHubResult> {
-    const resolved = resolveAgentHubEnv(input.env);
-    return this.initAgentHub({
-      clientId: input.clientId,
-      providerId: resolved.providerId,
-      providerName: resolved.providerName,
-      baseUrl: resolved.baseUrl,
-      apiKeyEnv: agentHubApiKeyEnv(input.clientId, resolved.apiKeyEnv),
-      modelId: resolved.modelId,
-      modelType: resolved.modelType,
-      availableModels: resolved.availableModels,
-      yes: input.yes,
-    });
-  }
-
-  async applyAgentHubPlan(input: ApplyAgentHubPlanInput): Promise<InitAgentHubResult> {
-    const models = normalizeAgentHubModels(input.modelId, input.availableModels);
-    const provider = providerProfileSchema.parse({
-      id: input.providerId,
-      name: input.providerName,
-      type: input.providerType,
-      baseUrl: input.baseUrl,
-      apiKeyEnv: input.apiKeyEnv,
-      models,
-      defaultModel: input.modelId,
-    } satisfies ProviderProfile);
-
-    const adapter = this.adapters.get(input.clientId);
-    if (!adapter) throw new Error(`Client not supported: ${input.clientId}`);
-
-    await this.store.update((config) => {
-      config.providers[provider.id] = provider;
-      const currentCandidates = config.routes.default?.candidates ?? [];
-      const nextCandidate = { providerId: provider.id, modelId: input.modelId };
-      config.routes.default = {
-        candidates: [
-          nextCandidate,
-          ...currentCandidates.filter((candidate) => candidate.providerId !== provider.id),
-        ],
-      };
-      return config;
-    });
-    await adapter.apply(input.plan);
-    await this.stateStore.update((state) => {
-      state.lastSwitch = {
-        clientId: input.clientId,
-        providerId: provider.id,
-        modelId: input.modelId,
-        at: new Date().toISOString(),
-      };
-      return state;
-    });
-    return {
-      clientId: input.clientId,
-      providerId: provider.id,
-      modelId: input.modelId,
-      modelType: input.modelType,
-      providerType: input.providerType,
-      configPath: adapter.configPath,
-      applied: true,
-      requiresConfirmation: false,
-      plan: input.plan,
-    };
   }
 
   async useClientProxy(input: UseClientProxyInput): Promise<UseClientResult> {
@@ -708,25 +627,6 @@ export class AiAgentSwitchApp {
 function proxyBaseUrl(host: string, port: number): string {
   const requestHost = host === "0.0.0.0" ? "127.0.0.1" : host;
   return `http://${requestHost}:${port}/v1`;
-}
-
-function normalizeAgentHubModels(modelId: string, availableModels: AgentHubAvailableModel[]): ModelProfile[] {
-  const seen = new Set<string>();
-  const models = availableModels.flatMap((model) => {
-    const id = model.id.trim();
-    if (!id || seen.has(id)) return [];
-    seen.add(id);
-    return [{ id, type: model.type }];
-  });
-  if (!models.some((model) => model.id === modelId)) {
-    throw new Error(`Model ${modelId} must be included in --available-model`);
-  }
-  return models;
-}
-
-function agentHubApiKeyEnv(clientId: ClientId, defaultEnv: string): string {
-  if (clientId === "cowagent") return "OPEN_AI_API_KEY";
-  return defaultEnv;
 }
 
 function firstDuplicate(values: string[]): string | undefined {

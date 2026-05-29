@@ -221,16 +221,6 @@ ai-agent-switch provider init \
 
 `provider init` 会把 AIProxy 保持为一个 provider，并记录每个模型自己的请求 API 模式。每个 `--model` 都必须写成 `modelId:apiMode`；目前支持 `chat_completions`、`codex_responses` 和 `anthropic_messages`。
 
-Agent Hub 模板不需要在 shell 脚本中维护 provider/model 映射，推荐在容器启动时从运行期环境变量初始化原生 client 配置：
-
-```bash
-ai-agent-switch agent-hub init --client hermes --from-env -y --json
-ai-agent-switch agent-hub init --client openclaw --from-env -y --json
-ai-agent-switch agent-hub init --client cowagent --from-env -y --json
-```
-
-命令读取 `AGENT_MODEL_PROVIDER`、`AGENT_MODEL_BASEURL`、`AGENT_MODEL_APIKEY`、`AGENT_MODEL` 和 `AGENT_MODEL_API_MODE`，并写入对应 client 的原生配置。CowAgent 运行时仍读取原生 `OPEN_AI_API_KEY`，因此 Agent Hub 模板需要继续为 CowAgent 注入该环境变量。
-
 内置 preset 包括：
 
 - `openrouter`
@@ -282,6 +272,14 @@ ai-agent-switch switch --client openclaw --provider aiproxy --dry-run --json
 ```
 
 省略 `--model` 时，`switch` 会使用 provider 的 `defaultModel`。如果 provider 没有默认模型，命令会失败，并要求显式传入 `--model`。
+
+为某个 client 配置一个或多个具名模型槽位：
+
+```bash
+ai-agent-switch client configure --client cowagent --slot main=aiproxy/glm-5.1 -y --json
+```
+
+`client configure` 会以原子方式应用目标 client 请求的具名模型槽位配置。`main` 槽位是默认运行模型；其他槽位是 client-specific 的，只有在对应 client adapter 明确支持并消费时，才会影响运行时行为。
 
 查看 ai-agent-switch 支持配置的 client 列表，不读取各 client 当前配置：
 

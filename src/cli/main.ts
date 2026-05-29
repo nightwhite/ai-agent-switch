@@ -19,6 +19,7 @@ import { aiAgentSwitchJsonSchema } from "../config/json-schema";
 import { completionScript } from "./completion";
 import { getProviderPreset, listProviderPresets } from "../providers/presets";
 import { packageVersion } from "./version";
+import type { ClientSlotTarget } from "../clients/types";
 
 const cli = cac("ai-agent-switch");
 const app = new AiAgentSwitchApp();
@@ -78,9 +79,11 @@ cli.command("config <action>", "Configuration commands: path / validate / schema
   throw new Error(`Unsupported config action: ${action}`);
 });
 
-cli.command("client <action> [client]", "Client commands: list / detect / show / use-proxy")
+cli.command("client <action> [client]", "Client commands: list / detect / show / use-proxy / configure")
   .option("--json", "Output JSON")
   .option("--dry-run", "Print the change plan without writing client config")
+  .option("--client <client>", "Client id")
+  .option("--slot <slot>", "Model slot, repeatable, format name=provider/model", { default: [] })
   .option("-y, --yes", "Skip interactive confirmation, but keep hard validation")
   .action(async (action: string, client: string | undefined, options) => {
     if (action === "list") {
@@ -141,6 +144,31 @@ cli.command("client <action> [client]", "Client commands: list / detect / show /
           return;
         }
         await app.useClientProxy({ clientId, yes: true });
+        console.log(pc.green("OK applied"));
+        return;
+      }
+      console.log(pc.green("OK applied"));
+      return;
+    }
+    if (action === "configure") {
+      const clientId = parseClientId(stringOption(options.client ?? client, "client"));
+      const slots = parseClientSlots(options.slot);
+      const result = await app.configureClient({ clientId, slots, yes: Boolean(options.yes) && !options.dryRun });
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      printPatchPlan(result.plan);
+      if (options.dryRun) {
+        console.log(pc.yellow("dry-run: client config was not written"));
+        return;
+      }
+      if (result.requiresConfirmation) {
+        if (!(await confirm("Apply these configuration changes?"))) {
+          console.log(pc.yellow("Canceled; client config was not written"));
+          return;
+        }
+        await app.configureClient({ clientId, slots, yes: true });
         console.log(pc.green("OK applied"));
         return;
       }
@@ -405,110 +433,6 @@ cli
     }
   });
 
-cli
-  .command("agent-hub <action>", "Agent Hub commands: init")
-  .option("--client <client>", "Client id")
-  .option("--provider-id <id>", "Provider id")
-  .option("--provider-name <name>", "Provider display name")
-  .option("--model-type <type>", `Selected model type: ${selectableProviderTypes.join(", ")}`)
-  .option("--base-url <url>", "AI Proxy relay base URL")
-  .option("--api-key-env <name>", "API key environment variable name")
-  .option("--model <model>", "Selected model id")
-  .option("--available-model <model>", "Available model id, repeatable", { default: [] })
-  .option("--from-env", "Read Agent Hub model configuration from AGENT_MODEL_* environment variables")
-  .option("--dry-run", "Print the change plan without writing client config")
-  .option("--json", "Output JSON")
-  .option("-y, --yes", "Skip interactive confirmation, but keep hard validation")
-  .action(async (action: string, options) => {
-    if ((action === "init" || action === "sync") && options.fromEnv) {
-      if (action === "sync") {
-        console.warn(pc.yellow("agent-hub sync --from-env is deprecated; use agent-hub init --from-env"));
-      }
-      const clientId = parseClientId(stringOption(options.client, "client"));
-      const result = await app.initAgentHubFromEnv({
-        clientId,
-        env: process.env,
-        yes: Boolean(options.yes) && !options.dryRun,
-      });
-      if (options.json) {
-        console.log(JSON.stringify(result, null, 2));
-        return;
-      }
-      printPatchPlan(result.plan);
-      if (options.dryRun) {
-        console.log(pc.yellow("dry-run: client config was not written"));
-        return;
-      }
-      if (result.requiresConfirmation) {
-        if (!(await confirm("Apply these configuration changes?"))) {
-          console.log(pc.yellow("Canceled; client config was not written"));
-          return;
-        }
-        await app.initAgentHubFromEnv({
-          clientId,
-          env: process.env,
-          yes: true,
-        });
-        console.log(pc.green("OK applied"));
-        return;
-      }
-      console.log(pc.green("OK applied"));
-      return;
-    }
-    if (action === "sync") {
-      if (!options.fromEnv) {
-        throw new Error("agent-hub sync requires --from-env");
-      }
-    }
-    if (action !== "init") {
-      throw new Error(`Unsupported agent-hub action: ${action}`);
-    }
-    const modelType = parseProviderType(stringOption(options.modelType, "model-type"), "model-type");
-    const availableModels = normalizeAgentHubAvailableModels(options.availableModel, modelType);
-    const result = await app.initAgentHub({
-      clientId: parseClientId(stringOption(options.client, "client")),
-      providerId: stringOption(options.providerId, "provider-id"),
-      providerName: stringOption(options.providerName, "provider-name"),
-      baseUrl: stringOption(options.baseUrl, "base-url"),
-      apiKeyEnv: stringOption(options.apiKeyEnv, "api-key-env"),
-      modelId: stringOption(options.model, "model"),
-      modelType,
-      availableModels,
-      yes: Boolean(options.yes) && !options.dryRun,
-    });
-    if (options.json) {
-      console.log(JSON.stringify(result, null, 2));
-      return;
-    }
-    printPatchPlan(result.plan);
-    if (options.dryRun) {
-      console.log(pc.yellow("dry-run: client config was not written"));
-      return;
-    }
-    if (result.requiresConfirmation) {
-      if (!(await confirm("Apply these configuration changes?"))) {
-        console.log(pc.yellow("Canceled; client config was not written"));
-        return;
-      }
-      await app.applyAgentHubPlan({
-        clientId: result.clientId,
-        providerId: result.providerId,
-        providerName: stringOption(options.providerName, "provider-name"),
-        baseUrl: stringOption(options.baseUrl, "base-url"),
-        apiKeyEnv: stringOption(options.apiKeyEnv, "api-key-env"),
-        modelId: result.modelId,
-        modelType: result.modelType,
-        providerType: result.providerType,
-        availableModels,
-        plan: result.plan,
-        yes: true,
-      });
-      console.log(pc.green("OK applied"));
-      return;
-    }
-    console.log(pc.green("OK applied"));
-  });
-
 cli.command("current", "Show current provider/model for all clients").action(async () => {
   const status = await app.status();
   for (const client of status.clients) {
@@ -684,17 +608,6 @@ function normalizeModels(value: unknown): string[] {
   return [];
 }
 
-function normalizeAgentHubAvailableModels(value: unknown, defaultModelType: ProviderType): { id: string; type: ProviderType }[] {
-  return normalizeModels(value).map((entry) => {
-    const separator = entry.lastIndexOf(":");
-    if (separator === -1) return { id: entry, type: defaultModelType };
-    const id = entry.slice(0, separator).trim();
-    const type = parseProviderType(entry.slice(separator + 1).trim(), "available-model type");
-    if (!id) throw new Error(`Invalid --available-model: ${entry}`);
-    return { id, type };
-  });
-}
-
 function parseProviderInitModels(value: unknown): { id: string; type: ProviderType }[] {
   const models = normalizeModels(value);
   if (models.length === 0) throw new Error("Missing --model");
@@ -707,6 +620,21 @@ function parseProviderInitModels(value: unknown): { id: string; type: ProviderTy
     if (!id) throw new Error(`Invalid --model: ${entry}`);
     const mode = parseModelApiMode(entry.slice(separator + 1).trim(), "apiMode in --model");
     return { id, type: providerTypeForModelApiMode(mode) };
+  });
+}
+
+function parseClientSlots(value: unknown): ClientSlotTarget[] {
+  return normalizeModels(value).map((entry) => {
+    const equals = entry.indexOf("=");
+    const slash = entry.indexOf("/", equals + 1);
+    if (equals <= 0 || slash <= equals + 1 || slash === entry.length - 1) {
+      throw new Error(`Invalid --slot: ${entry}. Expected name=provider/model`);
+    }
+    return {
+      slot: entry.slice(0, equals).trim(),
+      providerId: entry.slice(equals + 1, slash).trim(),
+      modelId: entry.slice(slash + 1).trim(),
+    };
   });
 }
 
