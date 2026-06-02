@@ -224,13 +224,17 @@ describe("extended client adapters", () => {
       expect(parsed.bot_type).toBe("openai");
       expect(parsed.open_ai_api_base).toBe("https://aiproxy.hzh.sealos.run/v1");
       expect(parsed.open_ai_api_key).toBe("sk-test");
-      expect(parsed.ai_agent_switch).toEqual({ provider: "aiproxy-openai", model: "deepseek-v4-flash" });
+      expect(parsed.ai_agent_switch).toMatchObject({ provider: "aiproxy-openai", model: "deepseek-v4-flash" });
+      expect(parsed.ai_agent_switch.live_apply).toEqual({
+        providers: [{ providerId: "openai", apiKey: "sk-test", apiBase: "https://aiproxy.hzh.sealos.run/v1" }],
+        capabilities: [{ capability: "chat", providerId: "openai", model: "deepseek-v4-flash" }],
+      });
     } finally {
       await rm(home, { recursive: true, force: true });
     }
   });
 
-  test("cowagent adapter rejects Anthropic providers", async () => {
+  test("cowagent adapter maps Anthropic providers to Claude native config", async () => {
     const home = await mkdtemp(join(tmpdir(), "ai-agent-switch-cowagent-anthropic-"));
     try {
       const cowagent = createClientAdapters({ homeDir: home, cwd: home }).get("cowagent")!;
@@ -238,14 +242,25 @@ describe("extended client adapters", () => {
         id: "aiproxy-anthropic",
         name: "Ai Proxy Anthropic",
         type: "anthropic",
-        baseUrl: "https://aiproxy.hzh.sealos.run/v1",
-        apiKeyEnv: "CLAUDE_API_KEY",
-        models: [{ id: "deepseek-v4-pro", name: "DeepSeek V4 Pro" }],
+        baseUrl: "https://aiproxy.hzh.sealos.io/v1",
+        apiKeyEnv: "OPEN_AI_API_KEY",
+        models: [{ id: "claude-opus-4-7", name: "Claude Opus 4.7" }],
       };
 
-      await expect(cowagent.planApply({ provider: anthropicProvider, modelId: "deepseek-v4-pro" })).rejects.toThrow(
-        "CowAgent requires an OpenAI Chat-compatible provider",
-      );
+      process.env.OPEN_AI_API_KEY = "sk-anthropic-from-env";
+      await cowagent.apply(await cowagent.planApply({ provider: anthropicProvider, modelId: "claude-opus-4-7" }));
+      delete process.env.OPEN_AI_API_KEY;
+
+      const parsed = JSON.parse(await readFile(join(home, "CowAgent/config.json"), "utf8"));
+      expect(parsed.model).toBe("claude-opus-4-7");
+      expect(parsed.bot_type).toBe("claudeAPI");
+      expect(parsed.claude_api_base).toBe("https://aiproxy.hzh.sealos.io/anthropic");
+      expect(parsed.claude_api_key).toBe("sk-anthropic-from-env");
+      expect(parsed.ai_agent_switch).toMatchObject({ provider: "aiproxy-anthropic", model: "claude-opus-4-7" });
+      expect(parsed.ai_agent_switch.live_apply).toEqual({
+        providers: [{ providerId: "claudeAPI", apiKey: "sk-anthropic-from-env", apiBase: "https://aiproxy.hzh.sealos.io/anthropic" }],
+        capabilities: [{ capability: "chat", providerId: "claudeAPI", model: "claude-opus-4-7" }],
+      });
     } finally {
       await rm(home, { recursive: true, force: true });
     }
@@ -268,6 +283,390 @@ describe("extended client adapters", () => {
         "CowAgent requires an OpenAI Chat-compatible provider",
       );
     } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+
+  test("cowagent adapter normalizes AIProxy Anthropic base URL for Claude native config", async () => {
+    const home = await mkdtemp(join(tmpdir(), "ai-agent-switch-cowagent-aiproxy-anthropic-base-"));
+    try {
+      const cowagent = createClientAdapters({ homeDir: home, cwd: home }).get("cowagent")!;
+      const anthropicProvider: ProviderProfile = {
+        id: "aiproxy",
+        name: "AI Proxy",
+        type: "openai-chat-compatible",
+        baseUrl: "https://aiproxy.usw-1.sealos.io/v1",
+        apiKeyEnv: "OPEN_AI_API_KEY",
+        models: [{ id: "claude-opus-4-7", type: "anthropic", apiMode: "anthropic_messages", kind: "llm" }],
+      };
+
+      process.env.OPEN_AI_API_KEY = "sk-aiproxy-anthropic";
+      await cowagent.apply(await cowagent.planApply({ provider: anthropicProvider, modelId: "claude-opus-4-7" }));
+      delete process.env.OPEN_AI_API_KEY;
+
+      const parsed = JSON.parse(await readFile(join(home, "CowAgent/config.json"), "utf8"));
+      expect(parsed.claude_api_base).toBe("https://aiproxy.usw-1.sealos.io/anthropic");
+      expect(parsed.ai_agent_switch.live_apply.providers).toEqual([
+        { providerId: "claudeAPI", apiKey: "sk-aiproxy-anthropic", apiBase: "https://aiproxy.usw-1.sealos.io/anthropic" },
+      ]);
+    } finally {
+      delete process.env.OPEN_AI_API_KEY;
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test("cowagent adapter keeps AIProxy chat and Anthropic slots on separate endpoints", async () => {
+    const home = await mkdtemp(join(tmpdir(), "ai-agent-switch-cowagent-aiproxy-endpoints-"));
+    try {
+      const cowagent = createClientAdapters({ homeDir: home, cwd: home }).get("cowagent")!;
+      const chatProvider: ProviderProfile = {
+        id: "aiproxy-chat",
+        name: "AI Proxy Chat",
+        type: "openai-chat-compatible",
+        baseUrl: "https://aiproxy.usw-1.sealos.io/v1",
+        apiKeyEnv: "OPEN_AI_API_KEY",
+        models: [{ id: "gpt-5.4-mini", type: "openai-chat-compatible", kind: "llm" }],
+      };
+      const anthropicProvider: ProviderProfile = {
+        id: "aiproxy-anthropic",
+        name: "AI Proxy Anthropic",
+        type: "anthropic",
+        baseUrl: "https://aiproxy.usw-1.sealos.io/v1",
+        apiKeyEnv: "OPEN_AI_API_KEY",
+        models: [{ id: "claude-opus-4-7", type: "anthropic", kind: "llm" }],
+      };
+
+      process.env.OPEN_AI_API_KEY = "sk-aiproxy";
+      await cowagent.apply(await cowagent.planApplySlots!({
+        slots: [
+          { slot: "main", provider: anthropicProvider, modelId: "claude-opus-4-7" },
+          { slot: "vision", provider: chatProvider, modelId: "gpt-5.4-mini" },
+        ],
+      }));
+      delete process.env.OPEN_AI_API_KEY;
+
+      const parsed = JSON.parse(await readFile(join(home, "CowAgent/config.json"), "utf8"));
+      expect(parsed.bot_type).toBe("claudeAPI");
+      expect(parsed.claude_api_base).toBe("https://aiproxy.usw-1.sealos.io/anthropic");
+      expect(parsed.open_ai_api_base).toBe("https://aiproxy.usw-1.sealos.io/v1");
+      expect(parsed.tools.vision).toEqual({ provider: "openai", model: "gpt-5.4-mini" });
+      expect(parsed.ai_agent_switch.slots).toEqual({
+        main: { provider: "aiproxy-anthropic", model: "claude-opus-4-7" },
+        vision: { provider: "aiproxy-chat", model: "gpt-5.4-mini" },
+      });
+    } finally {
+      delete process.env.OPEN_AI_API_KEY;
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test("cowagent adapter maps Anthropic vision slots to Claude native config", async () => {
+    const home = await mkdtemp(join(tmpdir(), "ai-agent-switch-cowagent-claude-vision-"));
+    try {
+      const cowagent = createClientAdapters({ homeDir: home, cwd: home }).get("cowagent")!;
+      const anthropicProvider: ProviderProfile = {
+        id: "aiproxy-anthropic",
+        name: "AI Proxy Anthropic",
+        type: "anthropic",
+        baseUrl: "https://aiproxy.usw-1.sealos.io/v1",
+        apiKeyEnv: "OPEN_AI_API_KEY",
+        models: [
+          { id: "claude-opus-4-7", type: "anthropic", kind: "llm" },
+          { id: "claude-sonnet-4-6", type: "anthropic", kind: "llm" },
+        ],
+      };
+
+      process.env.OPEN_AI_API_KEY = "sk-claude-vision";
+      await cowagent.apply(await cowagent.planApplySlots!({
+        slots: [
+          { slot: "main", provider: anthropicProvider, modelId: "claude-opus-4-7" },
+          { slot: "vision", provider: anthropicProvider, modelId: "claude-sonnet-4-6" },
+        ],
+      }));
+      delete process.env.OPEN_AI_API_KEY;
+
+      const parsed = JSON.parse(await readFile(join(home, "CowAgent/config.json"), "utf8"));
+      expect(parsed.bot_type).toBe("claudeAPI");
+      expect(parsed.claude_api_base).toBe("https://aiproxy.usw-1.sealos.io/anthropic");
+      expect(parsed.claude_api_key).toBe("sk-claude-vision");
+      expect(parsed.tools.vision).toEqual({ provider: "claudeAPI", model: "claude-sonnet-4-6" });
+      expect(parsed.ai_agent_switch.live_apply).toEqual({
+        providers: [{ providerId: "claudeAPI", apiKey: "sk-claude-vision", apiBase: "https://aiproxy.usw-1.sealos.io/anthropic" }],
+        capabilities: [
+          { capability: "chat", providerId: "claudeAPI", model: "claude-opus-4-7" },
+          { capability: "vision", providerId: "claudeAPI", model: "claude-sonnet-4-6" },
+        ],
+      });
+    } finally {
+      delete process.env.OPEN_AI_API_KEY;
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test("cowagent adapter maps Anthropic capability slots by API mode, not model prefix", async () => {
+    const home = await mkdtemp(join(tmpdir(), "ai-agent-switch-cowagent-anthropic-capability-"));
+    try {
+      const cowagent = createClientAdapters({ homeDir: home, cwd: home }).get("cowagent")!;
+      const chatProvider: ProviderProfile = {
+        id: "aiproxy-chat",
+        name: "AI Proxy Chat",
+        type: "openai-chat-compatible",
+        baseUrl: "https://aiproxy.usw-1.sealos.io/v1",
+        apiKeyEnv: "OPEN_AI_API_KEY",
+        models: [{ id: "glm-5.1", type: "openai-chat-compatible", kind: "llm" }],
+      };
+      const anthropicProvider: ProviderProfile = {
+        id: "aiproxy-anthropic",
+        name: "AI Proxy Anthropic",
+        type: "anthropic",
+        baseUrl: "https://aiproxy.usw-1.sealos.io/v1",
+        apiKeyEnv: "OPEN_AI_API_KEY",
+        models: [{ id: "deepseek-v4-pro", type: "anthropic", kind: "llm" }],
+      };
+
+      process.env.OPEN_AI_API_KEY = "sk-anthropic-capability";
+      await cowagent.apply(await cowagent.planApplySlots!({
+        slots: [
+          { slot: "main", provider: chatProvider, modelId: "glm-5.1" },
+          { slot: "vision", provider: anthropicProvider, modelId: "deepseek-v4-pro" },
+        ],
+      }));
+      delete process.env.OPEN_AI_API_KEY;
+
+      const parsed = JSON.parse(await readFile(join(home, "CowAgent/config.json"), "utf8"));
+      expect(parsed.model).toBe("glm-5.1");
+      expect(parsed.bot_type).toBe("openai");
+      expect(parsed.tools.vision).toEqual({ provider: "claudeAPI", model: "deepseek-v4-pro" });
+      expect(parsed.claude_api_base).toBe("https://aiproxy.usw-1.sealos.io/anthropic");
+      expect(parsed.claude_api_key).toBe("sk-anthropic-capability");
+      expect(parsed.ai_agent_switch.live_apply).toEqual({
+        providers: [
+          { providerId: "openai", apiKey: "sk-anthropic-capability", apiBase: "https://aiproxy.usw-1.sealos.io/v1" },
+          { providerId: "claudeAPI", apiKey: "sk-anthropic-capability", apiBase: "https://aiproxy.usw-1.sealos.io/anthropic" },
+        ],
+        capabilities: [
+          { capability: "chat", providerId: "openai", model: "glm-5.1" },
+          { capability: "vision", providerId: "claudeAPI", model: "deepseek-v4-pro" },
+        ],
+      });
+    } finally {
+      delete process.env.OPEN_AI_API_KEY;
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test("cowagent adapter live-applies provider and capability through CowAgent API when required", async () => {
+    const home = await mkdtemp(join(tmpdir(), "ai-agent-switch-cowagent-live-"));
+    const calls: Array<{ path: string; body: unknown; cookie: string }> = [];
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        if (url.pathname === "/auth/login") {
+          calls.push({ path: url.pathname, body: await request.json(), cookie: request.headers.get("cookie") ?? "" });
+          return new Response(JSON.stringify({ status: "success" }), {
+            headers: { "set-cookie": "cow_auth_token=test-token; Path=/; HttpOnly" },
+          });
+        }
+        if (url.pathname === "/api/models") {
+          calls.push({ path: url.pathname, body: await request.json(), cookie: request.headers.get("cookie") ?? "" });
+          return Response.json({ status: "success" });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+
+    const previousPort = process.env.COWAGENT_WEB_PORT;
+    const previousPassword = process.env.COWAGENT_WEB_PASSWORD;
+    const previousLiveApply = process.env.AI_AGENT_SWITCH_COWAGENT_LIVE_APPLY;
+    const previousOpenAIKey = process.env.OPEN_AI_API_KEY;
+    try {
+      await mkdir(join(home, "CowAgent"), { recursive: true });
+      await writeFile(join(home, "CowAgent/config.json"), JSON.stringify({
+        voice_to_text: "openai",
+        voice_to_text_model: "whisper-1",
+      }, null, 2));
+
+      process.env.COWAGENT_WEB_PORT = String(server.port);
+      process.env.COWAGENT_WEB_PASSWORD = "pw-test";
+      process.env.AI_AGENT_SWITCH_COWAGENT_LIVE_APPLY = "required";
+      process.env.OPEN_AI_API_KEY = "sk-live";
+
+      const cowagent = createClientAdapters({ homeDir: home, cwd: home }).get("cowagent")!;
+      const anthropicProvider: ProviderProfile = {
+        id: "aiproxy-anthropic",
+        name: "AI Proxy Anthropic",
+        type: "anthropic",
+        baseUrl: "https://aiproxy.usw-1.sealos.io/v1",
+        apiKeyEnv: "OPEN_AI_API_KEY",
+        models: [{ id: "claude-opus-4-7", type: "anthropic", kind: "llm" }],
+      };
+      const chatProvider: ProviderProfile = {
+        id: "aiproxy-chat",
+        name: "AI Proxy Chat",
+        type: "openai-chat-compatible",
+        baseUrl: "https://aiproxy.usw-1.sealos.io/v1",
+        apiKeyEnv: "OPEN_AI_API_KEY",
+        models: [
+          { id: "gpt-5.4-mini", type: "openai-chat-compatible", kind: "llm" },
+          { id: "gpt-4o-mini-transcribe", type: "openai-chat-compatible", kind: "asr" },
+        ],
+      };
+
+      await cowagent.apply(await cowagent.planApplySlots!({
+        slots: [
+          { slot: "main", provider: anthropicProvider, modelId: "claude-opus-4-7" },
+          { slot: "vision", provider: chatProvider, modelId: "gpt-5.4-mini" },
+          { slot: "asr", provider: chatProvider, modelId: "gpt-4o-mini-transcribe" },
+        ],
+      }));
+
+      expect(calls).toEqual([
+        { path: "/auth/login", body: { password: "pw-test" }, cookie: "" },
+        {
+          path: "/api/models",
+          body: {
+            action: "set_provider",
+            provider_id: "claudeAPI",
+            api_key: "sk-live",
+            api_base: "https://aiproxy.usw-1.sealos.io/anthropic",
+          },
+          cookie: "cow_auth_token=test-token",
+        },
+        {
+          path: "/api/models",
+          body: {
+            action: "set_provider",
+            provider_id: "openai",
+            api_key: "sk-live",
+            api_base: "https://aiproxy.usw-1.sealos.io/v1",
+          },
+          cookie: "cow_auth_token=test-token",
+        },
+        {
+          path: "/api/models",
+          body: {
+            action: "set_capability",
+            capability: "chat",
+            provider_id: "claudeAPI",
+            model: "claude-opus-4-7",
+          },
+          cookie: "cow_auth_token=test-token",
+        },
+        {
+          path: "/api/models",
+          body: {
+            action: "set_capability",
+            capability: "vision",
+            provider_id: "openai",
+            model: "gpt-5.4-mini",
+          },
+          cookie: "cow_auth_token=test-token",
+        },
+        {
+          path: "/api/models",
+          body: {
+            action: "set_capability",
+            capability: "asr",
+            provider_id: "openai",
+            model: "gpt-4o-mini-transcribe",
+          },
+          cookie: "cow_auth_token=test-token",
+        },
+      ]);
+
+      const parsed = JSON.parse(await readFile(join(home, "CowAgent/config.json"), "utf8"));
+      expect(parsed.open_ai_api_key).toBe("sk-live");
+    } finally {
+      server.stop(true);
+      if (previousPort === undefined) delete process.env.COWAGENT_WEB_PORT; else process.env.COWAGENT_WEB_PORT = previousPort;
+      if (previousPassword === undefined) delete process.env.COWAGENT_WEB_PASSWORD; else process.env.COWAGENT_WEB_PASSWORD = previousPassword;
+      if (previousLiveApply === undefined) delete process.env.AI_AGENT_SWITCH_COWAGENT_LIVE_APPLY; else process.env.AI_AGENT_SWITCH_COWAGENT_LIVE_APPLY = previousLiveApply;
+      if (previousOpenAIKey === undefined) delete process.env.OPEN_AI_API_KEY; else process.env.OPEN_AI_API_KEY = previousOpenAIKey;
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test("cowagent adapter does not write config when required live apply is rejected", async () => {
+    const home = await mkdtemp(join(tmpdir(), "ai-agent-switch-cowagent-live-atomic-"));
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        if (url.pathname === "/api/models") {
+          return Response.json({ status: "error", message: "bad provider" });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+
+    const previousPort = process.env.COWAGENT_WEB_PORT;
+    const previousLiveApply = process.env.AI_AGENT_SWITCH_COWAGENT_LIVE_APPLY;
+    try {
+      await mkdir(join(home, "CowAgent"), { recursive: true });
+      await writeFile(join(home, "CowAgent/config.json"), JSON.stringify({
+        bot_type: "openai",
+        model: "old-model",
+      }, null, 2));
+      process.env.COWAGENT_WEB_PORT = String(server.port);
+      process.env.AI_AGENT_SWITCH_COWAGENT_LIVE_APPLY = "required";
+
+      const cowagent = createClientAdapters({ homeDir: home, cwd: home }).get("cowagent")!;
+      const provider: ProviderProfile = {
+        id: "aiproxy-chat",
+        name: "AI Proxy Chat",
+        type: "openai-chat-compatible",
+        baseUrl: "https://aiproxy.usw-1.sealos.io/v1",
+        apiKey: { kind: "inline", value: "sk-live" },
+        models: [{ id: "glm-5.1", type: "openai-chat-compatible", kind: "llm" }],
+      };
+
+      await expect(cowagent.apply(await cowagent.planApply({ provider, modelId: "glm-5.1" }))).rejects.toThrow("bad provider");
+      const parsed = JSON.parse(await readFile(join(home, "CowAgent/config.json"), "utf8"));
+      expect(parsed).toEqual({ bot_type: "openai", model: "old-model" });
+    } finally {
+      server.stop(true);
+      if (previousPort === undefined) delete process.env.COWAGENT_WEB_PORT; else process.env.COWAGENT_WEB_PORT = previousPort;
+      if (previousLiveApply === undefined) delete process.env.AI_AGENT_SWITCH_COWAGENT_LIVE_APPLY; else process.env.AI_AGENT_SWITCH_COWAGENT_LIVE_APPLY = previousLiveApply;
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test("cowagent adapter fails when required live apply is rejected by CowAgent API", async () => {
+    const home = await mkdtemp(join(tmpdir(), "ai-agent-switch-cowagent-live-error-"));
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        if (url.pathname === "/api/models") {
+          return Response.json({ status: "error", message: "bad provider" });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+
+    const previousPort = process.env.COWAGENT_WEB_PORT;
+    const previousLiveApply = process.env.AI_AGENT_SWITCH_COWAGENT_LIVE_APPLY;
+    try {
+      process.env.COWAGENT_WEB_PORT = String(server.port);
+      process.env.AI_AGENT_SWITCH_COWAGENT_LIVE_APPLY = "required";
+
+      const cowagent = createClientAdapters({ homeDir: home, cwd: home }).get("cowagent")!;
+      const provider: ProviderProfile = {
+        id: "aiproxy-chat",
+        name: "AI Proxy Chat",
+        type: "openai-chat-compatible",
+        baseUrl: "https://aiproxy.usw-1.sealos.io/v1",
+        apiKey: { kind: "inline", value: "sk-live" },
+        models: [{ id: "glm-5.1", type: "openai-chat-compatible", kind: "llm" }],
+      };
+
+      await expect(cowagent.apply(await cowagent.planApply({ provider, modelId: "glm-5.1" }))).rejects.toThrow("bad provider");
+    } finally {
+      server.stop(true);
+      if (previousPort === undefined) delete process.env.COWAGENT_WEB_PORT; else process.env.COWAGENT_WEB_PORT = previousPort;
+      if (previousLiveApply === undefined) delete process.env.AI_AGENT_SWITCH_COWAGENT_LIVE_APPLY; else process.env.AI_AGENT_SWITCH_COWAGENT_LIVE_APPLY = previousLiveApply;
       await rm(home, { recursive: true, force: true });
     }
   });
@@ -415,7 +814,10 @@ describe("extended client adapters", () => {
         expect(parsed.bot_type).toBe(item.botType);
         if ("baseKey" in item) expect(parsed[item.baseKey]).toBe(item.baseUrl);
         expect(parsed[item.keyKey]).toBe(`${item.type}-key`);
-        expect(parsed.ai_agent_switch).toEqual({ provider: `cowagent-${item.type}`, model: item.modelId });
+        expect(parsed.ai_agent_switch).toMatchObject({ provider: `cowagent-${item.type}`, model: item.modelId });
+        expect(parsed.ai_agent_switch.live_apply.capabilities).toEqual([
+          { capability: "chat", providerId: item.botType, model: item.modelId },
+        ]);
       } finally {
         await rm(home, { recursive: true, force: true });
       }

@@ -9,9 +9,11 @@ type CowAgentProviderFields = {
   apiBaseKey?: string | undefined;
   apiKeyKey?: string | undefined;
   expectedApiKeyEnv?: string | undefined;
+  acceptedApiKeyEnvs?: string[] | undefined;
 };
 
 type CowAgentCapabilityProvider =
+  | "claudeAPI"
   | "openai"
   | "gemini"
   | "dashscope"
@@ -26,6 +28,23 @@ type CowAgentCapabilityConfig = {
   provider: CowAgentCapabilityProvider;
   modelId: string;
   fields: CowAgentProviderFields;
+};
+
+type CowAgentLiveProvider = {
+  providerId: string;
+  apiKey?: string | undefined;
+  apiBase?: string | undefined;
+};
+
+type CowAgentLiveCapability = {
+  capability: string;
+  providerId: string;
+  model: string;
+};
+
+type CowAgentLiveApply = {
+  providers: CowAgentLiveProvider[];
+  capabilities: CowAgentLiveCapability[];
 };
 
 export class CowAgentAdapter extends BaseClientAdapter {
@@ -52,6 +71,7 @@ export class CowAgentAdapter extends BaseClientAdapter {
     const aiAgentSwitch = recordAt(config, "ai_agent_switch");
     aiAgentSwitch.provider = input.provider.id;
     aiAgentSwitch.model = input.modelId;
+    aiAgentSwitch.live_apply = buildCowAgentLiveApply([{ slot: "main", provider: input.provider, modelId: input.modelId }]);
 
     const file = before === undefined
       ? { path: this.configPath, after: stringifyJson(config) }
@@ -78,6 +98,7 @@ export class CowAgentAdapter extends BaseClientAdapter {
       };
       applyCowAgentCapabilitySlot(config, slot.slot, slot.provider, slot.modelId);
     }
+    aiAgentSwitch.live_apply = buildCowAgentLiveApply(input.slots);
 
     const file = before === undefined
       ? { path: this.configPath, after: stringifyJson(config) }
@@ -97,6 +118,14 @@ export class CowAgentAdapter extends BaseClientAdapter {
       configPath: this.configPath,
     };
   }
+
+  override async apply(plan: PatchPlan): Promise<void> {
+    if (process.env.AI_AGENT_SWITCH_COWAGENT_LIVE_APPLY === "required") {
+      const config = parseJsonObject(plan.files.find((file) => file.path === this.configPath)?.after ?? await readTextIfExists(this.configPath));
+      await applyCowAgentLiveConfig(config);
+    }
+    await super.apply(plan);
+  }
 }
 
 function applyCowAgentMain(config: Record<string, unknown>, provider: ProviderProfile, modelId: string): void {
@@ -107,7 +136,8 @@ function applyCowAgentMain(config: Record<string, unknown>, provider: ProviderPr
 
   config.model = modelId;
   config.bot_type = fields.botType;
-  if (fields.apiBaseKey) config[fields.apiBaseKey] = provider.baseUrl;
+  const apiBase = cowAgentApiBase(provider, fields);
+  if (fields.apiBaseKey) config[fields.apiBaseKey] = apiBase;
   if (fields.apiKeyKey) {
     const apiKey = cowAgentApiKey(provider, fields);
     if (apiKey !== undefined) config[fields.apiKeyKey] = apiKey;
@@ -125,7 +155,7 @@ function applyCowAgentCapabilitySlot(
   const capability = cowAgentCapabilityConfig(provider, modelId);
 
   if (slot === "vision") {
-    assertCowAgentCapabilityProvider(slot, capability.provider, ["openai", "gemini", "dashscope", "doubao", "zhipu", "moonshot", "minimax", "mimo", "linkai"]);
+    assertCowAgentCapabilityProvider(slot, capability.provider, ["claudeAPI", "openai", "gemini", "dashscope", "doubao", "zhipu", "moonshot", "minimax", "mimo", "linkai"]);
     const vision = recordAt(recordAt(config, "tools"), "vision");
     vision.provider = capability.provider;
     vision.model = capability.modelId;
@@ -203,6 +233,13 @@ function cowAgentCapabilityConfig(provider: ProviderProfile, modelId: string): C
       fields: providerFields,
     };
   }
+  if (providerFields.botType === "claudeAPI") {
+    return {
+      provider: "claudeAPI",
+      modelId,
+      fields: providerFields,
+    };
+  }
   const capabilityProvider = cowAgentCapabilityProvider(modelId);
   return {
     provider: capabilityProvider,
@@ -214,6 +251,7 @@ function cowAgentCapabilityConfig(provider: ProviderProfile, modelId: string): C
 function cowAgentCapabilityProvider(modelId: string): CowAgentCapabilityProvider {
   const model = modelId.toLowerCase();
   if (model.startsWith("qwen") || model === "text-embedding-v4") return "dashscope";
+  if (model.startsWith("claude-")) return "claudeAPI";
   if (model.startsWith("gemini-") || model.startsWith("nano-banana")) return "gemini";
   if (model.startsWith("gpt-") || model.startsWith("o1-") || model.startsWith("o3-") || model.startsWith("o4-") || model.startsWith("chatgpt-") || model.startsWith("text-embedding-3-") || model.startsWith("whisper-")) return "openai";
   if (model.startsWith("glm-") || model === "embedding-3") return "zhipu";
@@ -236,7 +274,8 @@ function applyCowAgentCapabilityCredential(
   provider: ProviderProfile,
   fields: CowAgentProviderFields,
 ): void {
-  if (fields.apiBaseKey && provider.baseUrl) config[fields.apiBaseKey] = provider.baseUrl;
+  const apiBase = cowAgentApiBase(provider, fields);
+  if (fields.apiBaseKey && apiBase) config[fields.apiBaseKey] = apiBase;
   if (!fields.apiKeyKey) return;
 
   const apiKey = cowAgentApiKeyForCapability(provider, fields);
@@ -245,6 +284,14 @@ function applyCowAgentCapabilityCredential(
 
 function cowAgentCapabilityProviderFields(provider: CowAgentCapabilityProvider): CowAgentProviderFields {
   switch (provider) {
+    case "claudeAPI":
+      return {
+        botType: "claudeAPI",
+        apiBaseKey: "claude_api_base",
+        apiKeyKey: "claude_api_key",
+        expectedApiKeyEnv: "CLAUDE_API_KEY",
+        acceptedApiKeyEnvs: ["OPEN_AI_API_KEY", "AGENT_MODEL_APIKEY"],
+      };
     case "openai":
       return { botType: "openai", apiBaseKey: "open_ai_api_base", apiKeyKey: "open_ai_api_key", expectedApiKeyEnv: "OPEN_AI_API_KEY" };
     case "gemini":
@@ -269,7 +316,13 @@ function cowAgentCapabilityProviderFields(provider: CowAgentCapabilityProvider):
 function cowAgentProviderFields(type: ProviderType): CowAgentProviderFields {
   switch (normalizeProviderType(type)) {
     case "anthropic":
-      throw new Error("CowAgent requires an OpenAI Chat-compatible provider; Anthropic providers are not supported");
+      return {
+        botType: "claudeAPI",
+        apiBaseKey: "claude_api_base",
+        apiKeyKey: "claude_api_key",
+        expectedApiKeyEnv: "CLAUDE_API_KEY",
+        acceptedApiKeyEnvs: ["OPEN_AI_API_KEY", "AGENT_MODEL_APIKEY"],
+      };
     case "gemini":
       return {
         botType: "gemini",
@@ -317,11 +370,208 @@ function cowAgentProviderFields(type: ProviderType): CowAgentProviderFields {
   }
 }
 
+function buildCowAgentLiveApply(slots: ApplyClientSlotsInput["slots"]): CowAgentLiveApply {
+  const providers = new Map<string, CowAgentLiveProvider>();
+  const capabilities: CowAgentLiveCapability[] = [];
+  for (const slot of slots) {
+    const fields = slot.slot === "main"
+      ? cowAgentProviderFields(resolveModelType(slot.provider, slot.modelId))
+      : cowAgentCapabilityConfig(slot.provider, slot.modelId).fields;
+    const providerId = slot.slot === "main"
+      ? fields.botType
+      : cowAgentCapabilityConfig(slot.provider, slot.modelId).provider;
+
+    if (!providers.has(providerId)) {
+      providers.set(providerId, {
+        providerId,
+        apiKey: cowAgentApiKeyForCapability(slot.provider, fields) ?? process.env[cowAgentNativeApiKeyEnv(providerId)] ?? "",
+        apiBase: cowAgentApiBase(slot.provider, fields),
+      });
+    }
+
+    capabilities.push({
+      capability: cowAgentCapabilityName(slot.slot),
+      providerId,
+      model: slot.modelId,
+    });
+  }
+  return { providers: [...providers.values()], capabilities };
+}
+
+function cowAgentApiBase(provider: ProviderProfile, fields: CowAgentProviderFields): string | undefined {
+  const baseUrl = provider.baseUrl?.trim();
+  if (!fields.apiBaseKey || !baseUrl) return undefined;
+  if (fields.botType !== "claudeAPI" || !isAIProxyProvider(provider, baseUrl)) return baseUrl;
+  return normalizeAIProxyAnthropicBaseUrl(baseUrl);
+}
+
+function isAIProxyProvider(provider: ProviderProfile, baseUrl: string): boolean {
+  if (provider.id === "aiproxy" || provider.id.startsWith("aiproxy-")) return true;
+  try {
+    return new URL(baseUrl).hostname.toLowerCase().includes("aiproxy");
+  } catch {
+    return false;
+  }
+}
+
+function normalizeAIProxyAnthropicBaseUrl(baseUrl: string): string {
+  const url = new URL(baseUrl);
+  const path = url.pathname.replace(/\/+$/, "");
+  if (path === "" || path === "/v1" || path === "/anthropic") {
+    url.pathname = "/anthropic";
+    url.search = "";
+    url.hash = "";
+    return url.toString().replace(/\/$/, "");
+  }
+  return baseUrl;
+}
+
+function cowAgentCapabilityName(slot: string): string {
+  return slot === "main" ? "chat" : slot;
+}
+
+function cowAgentLiveApplyFromConfig(config: Record<string, unknown>): CowAgentLiveApply {
+  const aiAgentSwitch = recordOrUndefined(config.ai_agent_switch);
+  const liveApply = recordOrUndefined(aiAgentSwitch?.live_apply);
+  const providers = Array.isArray(liveApply?.providers)
+    ? liveApply.providers.flatMap((item) => {
+        const provider = recordOrUndefined(item);
+        const providerId = stringAt(provider, "providerId");
+        if (!providerId) return [];
+        return [{
+          providerId,
+          apiKey: stringAt(provider, "apiKey") || process.env[cowAgentNativeApiKeyEnv(providerId)] || "",
+          apiBase: stringAt(provider, "apiBase") || undefined,
+        }];
+      })
+    : [];
+  const capabilities = Array.isArray(liveApply?.capabilities)
+    ? liveApply.capabilities.flatMap((item) => {
+        const capability = recordOrUndefined(item);
+        const name = stringAt(capability, "capability");
+        const providerId = stringAt(capability, "providerId");
+        const model = stringAt(capability, "model");
+        if (!name || !providerId || !model) return [];
+        return [{ capability: name, providerId, model }];
+      })
+    : [];
+  if (providers.length === 0 || capabilities.length === 0) {
+    throw new Error("CowAgent live apply metadata is missing; run client configure again");
+  }
+  return { providers, capabilities };
+}
+
+async function applyCowAgentLiveConfig(config: Record<string, unknown>): Promise<void> {
+  const liveApply = cowAgentLiveApplyFromConfig(config);
+  const client = new CowAgentLiveClient();
+  await client.login();
+  for (const provider of liveApply.providers) {
+    await client.postModels({
+      action: "set_provider",
+      provider_id: provider.providerId,
+      api_key: provider.apiKey,
+      api_base: provider.apiBase,
+    });
+  }
+  for (const capability of liveApply.capabilities) {
+    await client.postModels({
+      action: "set_capability",
+      capability: capability.capability,
+      provider_id: capability.providerId,
+      model: capability.model,
+    });
+  }
+}
+
+function cowAgentNativeApiKeyEnv(providerId: string): string {
+  switch (providerId) {
+    case "claudeAPI":
+      return "CLAUDE_API_KEY";
+    case "gemini":
+      return "GEMINI_API_KEY";
+    case "dashscope":
+      return "DASHSCOPE_API_KEY";
+    case "doubao":
+      return "ARK_API_KEY";
+    case "zhipu":
+      return "ZHIPU_AI_API_KEY";
+    case "moonshot":
+      return "MOONSHOT_API_KEY";
+    case "minimax":
+      return "MINIMAX_API_KEY";
+    case "mimo":
+      return "MIMO_API_KEY";
+    case "linkai":
+      return "LINKAI_API_KEY";
+    case "openai":
+      return "OPEN_AI_API_KEY";
+    default:
+      return "";
+  }
+}
+
+function stringAt(record: unknown, key: string): string {
+  if (!record || typeof record !== "object" || Array.isArray(record)) return "";
+  const value = (record as Record<string, unknown>)[key];
+  return typeof value === "string" ? value : "";
+}
+
+function recordOrUndefined(record: unknown): Record<string, unknown> | undefined {
+  if (!record || typeof record !== "object" || Array.isArray(record)) return undefined;
+  return record as Record<string, unknown>;
+}
+
+class CowAgentLiveClient {
+  private cookie = "";
+  private readonly baseUrl: string;
+
+  constructor() {
+    const port = process.env.COWAGENT_WEB_PORT || process.env.AGENT_PORT || "9899";
+    this.baseUrl = `http://127.0.0.1:${port}`;
+  }
+
+  async login(): Promise<void> {
+    const password = process.env.COWAGENT_WEB_PASSWORD ?? "";
+    if (!password) return;
+    const response = await fetch(`${this.baseUrl}/auth/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ password }),
+    });
+    const body = await response.json() as { status?: string; message?: string };
+    if (!response.ok || body.status !== "success") {
+      throw new Error(`CowAgent live apply login failed: ${body.message ?? response.statusText}`);
+    }
+    this.cookie = parseSetCookie(response.headers.get("set-cookie"));
+  }
+
+  async postModels(body: Record<string, unknown>): Promise<void> {
+    const response = await fetch(`${this.baseUrl}/api/models`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(this.cookie ? { cookie: this.cookie } : {}),
+      },
+      body: JSON.stringify(body),
+    });
+    const payload = await response.json() as { status?: string; message?: string };
+    if (!response.ok || payload.status !== "success") {
+      throw new Error(`CowAgent live apply failed: ${payload.message ?? response.statusText}`);
+    }
+  }
+}
+
+function parseSetCookie(value: string | null): string {
+  if (!value) return "";
+  return value.split(";", 1)[0] ?? "";
+}
+
 function cowAgentApiKeyForCapability(provider: ProviderProfile, fields: CowAgentProviderFields): string | undefined {
   if (provider.apiKey?.kind === "inline") return provider.apiKey.value;
   const envName = provider.apiKeyEnv ?? (provider.apiKey?.kind === "env" ? provider.apiKey.name : undefined);
   if (!envName) return undefined;
-  if (envName === fields.expectedApiKeyEnv) return undefined;
+  if (envName === fields.expectedApiKeyEnv) return process.env[envName] || undefined;
+  if (fields.acceptedApiKeyEnvs?.includes(envName)) return process.env[envName] || undefined;
   return process.env[envName] || undefined;
 }
 
@@ -329,8 +579,11 @@ function cowAgentApiKey(provider: ProviderProfile, fields: CowAgentProviderField
   if (provider.apiKey?.kind === "inline") return provider.apiKey.value;
   const envName = provider.apiKeyEnv ?? (provider.apiKey?.kind === "env" ? provider.apiKey.name : undefined);
   if (!envName) return undefined;
+  if (envName === fields.expectedApiKeyEnv) return process.env[envName] || undefined;
   if (envName !== fields.expectedApiKeyEnv) {
-    throw new Error(`CowAgent reads ${fields.expectedApiKeyEnv} for this provider type, but provider ${provider.id} uses ${envName}`);
+    if (fields.acceptedApiKeyEnvs?.includes(envName)) return process.env[envName] || undefined;
+    const allowed = [fields.expectedApiKeyEnv, ...(fields.acceptedApiKeyEnvs ?? [])].join(" or ");
+    throw new Error(`CowAgent reads ${allowed} for this provider type, but provider ${provider.id} uses ${envName}`);
   }
   return undefined;
 }
