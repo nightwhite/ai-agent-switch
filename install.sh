@@ -2,16 +2,19 @@
 set -eu
 
 AI_AGENT_SWITCH_REPO="${AI_AGENT_SWITCH_REPO:-sealos-apps/ai-agent-switch}"
+AI_AGENT_SWITCH_LATEST_RELEASE_URL="https://api.github.com/repos/${AI_AGENT_SWITCH_REPO}/releases/latest"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 VERSION=""
 
 usage() {
   cat <<'EOF'
 Usage:
+  install.sh
   install.sh <vX.Y.Z>
   install.sh --version <vX.Y.Z> [--install-dir <dir>]
 
 Examples:
+  curl -fsSL https://raw.githubusercontent.com/sealos-apps/ai-agent-switch/main/install.sh | sh
   curl -fsSL https://raw.githubusercontent.com/sealos-apps/ai-agent-switch/main/install.sh | sh -s -- vX.Y.Z
   curl -fsSL https://raw.githubusercontent.com/sealos-apps/ai-agent-switch/main/install.sh | sh -s -- --version vX.Y.Z --install-dir /usr/local/bin
 
@@ -19,6 +22,23 @@ Environment:
   AI_AGENT_SWITCH_REPO  GitHub repo, default: sealos-apps/ai-agent-switch
   INSTALL_DIR           Install directory, default: /usr/local/bin
 EOF
+}
+
+resolve_latest_version() {
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$AI_AGENT_SWITCH_LATEST_RELEASE_URL" \
+      | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+      | head -n 1
+    return
+  fi
+  if command -v wget >/dev/null 2>&1; then
+    wget -qO- "$AI_AGENT_SWITCH_LATEST_RELEASE_URL" \
+      | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+      | head -n 1
+    return
+  fi
+  echo "curl or wget is required to resolve the latest version" >&2
+  exit 1
 }
 
 while [ "$#" -gt 0 ]; do
@@ -49,7 +69,10 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-[ -n "$VERSION" ] || { echo "--version is required" >&2; exit 1; }
+if [ -z "$VERSION" ]; then
+  VERSION="$(resolve_latest_version)"
+fi
+[ -n "$VERSION" ] || { echo "failed to resolve latest ai-agent-switch release" >&2; exit 1; }
 
 os="$(uname -s | tr '[:upper:]' '[:lower:]')"
 arch="$(uname -m)"

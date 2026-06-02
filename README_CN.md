@@ -30,6 +30,12 @@ npm 会根据当前平台自动安装对应的二进制包，不需要手动下�
 容器镜像或精简 Linux 环境可以直接安装 GitHub Releases 里的独立二进制：
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/sealos-apps/ai-agent-switch/main/install.sh | sh
+```
+
+如需安装指定版本：
+
+```bash
 curl -fsSL https://raw.githubusercontent.com/sealos-apps/ai-agent-switch/main/install.sh | sh -s -- vX.Y.Z
 ```
 

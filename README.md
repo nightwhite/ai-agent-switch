@@ -30,6 +30,12 @@ npm installs the matching platform package automatically through optional depend
 For container images or minimal Linux environments, install the standalone binary from GitHub Releases:
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/sealos-apps/ai-agent-switch/main/install.sh | sh
+```
+
+To install a specific version:
+
+```bash
 curl -fsSL https://raw.githubusercontent.com/sealos-apps/ai-agent-switch/main/install.sh | sh -s -- vX.Y.Z
 ```
 
