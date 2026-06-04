@@ -417,7 +417,12 @@ function isAIProxyProvider(provider: ProviderProfile, baseUrl: string): boolean 
 }
 
 function normalizeAIProxyGeminiBaseUrl(baseUrl: string): string {
-  const url = new URL(baseUrl);
+  let url: URL;
+  try {
+    url = new URL(baseUrl);
+  } catch {
+    throw new Error(`Invalid AIProxy Gemini baseUrl: ${baseUrl}`);
+  }
   if (url.pathname.replace(/\/+$/, "") === "/v1beta") {
     url.pathname = "";
     url.search = "";

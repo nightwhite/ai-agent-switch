@@ -807,6 +807,38 @@ describe("extended client adapters", () => {
     }
   });
 
+  test("cowagent adapter rejects invalid AIProxy Gemini base URL", async () => {
+    const home = await mkdtemp(join(tmpdir(), "ai-agent-switch-cowagent-invalid-gemini-base-"));
+    try {
+      const cowagent = createClientAdapters({ homeDir: home, cwd: home }).get("cowagent")!;
+      const openAIProvider: ProviderProfile = {
+        id: "aiproxy-openai",
+        name: "AI Proxy OpenAI",
+        type: "openai-chat-compatible",
+        baseUrl: "https://aiproxy.usw-1.sealos.io/v1",
+        apiKeyEnv: "OPEN_AI_API_KEY",
+        models: [{ id: "gpt-5.5", type: "openai-chat-compatible", kind: "llm" }],
+      };
+      const geminiProvider: ProviderProfile = {
+        id: "aiproxy-gemini",
+        name: "AI Proxy Gemini",
+        type: "gemini",
+        baseUrl: "not a url",
+        apiKeyEnv: "GEMINI_API_KEY",
+        models: [{ id: "gemini-3.1-flash-image-preview", kind: "image_generation" }],
+      };
+
+      await expect(cowagent.planApplySlots!({
+        slots: [
+          { slot: "main", provider: openAIProvider, modelId: "gpt-5.5" },
+          { slot: "image", provider: geminiProvider, modelId: "gemini-3.1-flash-image-preview" },
+        ],
+      })).rejects.toThrow("Invalid AIProxy Gemini baseUrl");
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test("cowagent adapter maps OpenAI TTS models to CowAgent audio config", async () => {
     const home = await mkdtemp(join(tmpdir(), "ai-agent-switch-cowagent-openai-tts-"));
     try {
