@@ -63,8 +63,8 @@ describe("CLI integration", () => {
       const provider = JSON.parse(output);
       expect(provider.models).toEqual([
         { id: "glm-5.1", type: "openai-chat-compatible", apiMode: "chat_completions", kind: "llm" },
-        { id: "qwen-image-2.0-pro", type: "openai-chat-compatible", apiMode: "image_generation", kind: "image_generation" },
-        { id: "veo-3.1-generate-preview", type: "openai-chat-compatible", apiMode: "video_generation", kind: "video_generation" },
+        { id: "qwen-image-2.0-pro", apiMode: "image_generation", kind: "image_generation" },
+        { id: "veo-3.1-generate-preview", apiMode: "video_generation", kind: "video_generation" },
       ]);
       const config = JSON.parse(stripJsonc(await readFile(join(home, ".ai-agent-switch/config.jsonc"), "utf8")));
       expect(config.providers.aiproxy.models).toEqual(provider.models);
@@ -97,7 +97,7 @@ describe("CLI integration", () => {
 
       const provider = JSON.parse(output);
       expect(provider.models).toEqual([
-        { id: "vendor/model:release", type: "openai-chat-compatible", apiMode: "image_generation", kind: "image_generation" },
+        { id: "vendor/model:release", apiMode: "image_generation", kind: "image_generation" },
       ]);
     } finally {
       await rm(home, { recursive: true, force: true });

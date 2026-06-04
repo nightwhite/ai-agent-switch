@@ -630,7 +630,9 @@ function parseProviderInitModels(value: unknown): ModelProfile[] {
     const id = parts.slice(0, hasExplicitKind ? -2 : -1).join(":").trim();
     if (!id || !rawMode) throw new Error(`Invalid --model: ${entry}`);
     const apiMode = parseModelApiMode(rawMode, "apiMode in --model");
-    const model: ModelProfile = { id, type: providerTypeForModelApiMode(apiMode), apiMode };
+    const model: ModelProfile = { id, apiMode };
+    const type = providerTypeForModelApiMode(apiMode);
+    if (type) model.type = type;
     if (hasExplicitKind) {
       const kind = last as ModelKind;
       const allowedKinds = modelApiModeKinds(apiMode);

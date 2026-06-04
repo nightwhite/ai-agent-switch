@@ -83,20 +83,21 @@ export function normalizeProviderType(type: ProviderType): ProviderType {
   return type;
 }
 
-export function providerTypeForModelApiMode(mode: ModelApiMode): ProviderType {
+export function providerTypeForModelApiMode(mode: ModelApiMode): ProviderType | undefined {
   switch (mode) {
     case "chat_completions":
     case "openai_compatible":
-    case "image_generation":
-    case "video_generation":
-    case "audio_transcriptions":
-    case "audio_speech":
-    case "embeddings":
       return "openai-chat-compatible";
     case "codex_responses":
       return "openai-responses";
     case "anthropic_messages":
       return "anthropic";
+    case "image_generation":
+    case "video_generation":
+    case "audio_transcriptions":
+    case "audio_speech":
+    case "embeddings":
+      return undefined;
     default:
       throw new Error(`Unsupported model API mode: ${String(mode)}`);
   }

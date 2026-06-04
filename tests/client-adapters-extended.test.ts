@@ -728,6 +728,85 @@ describe("extended client adapters", () => {
     }
   });
 
+  test("cowagent adapter maps AIProxy native runtime providers for multimodal slots", async () => {
+    const home = await mkdtemp(join(tmpdir(), "ai-agent-switch-cowagent-native-slots-"));
+    try {
+      const cowagent = createClientAdapters({ homeDir: home, cwd: home }).get("cowagent")!;
+      const openAIProvider: ProviderProfile = {
+        id: "aiproxy-openai",
+        name: "AI Proxy OpenAI",
+        type: "openai-chat-compatible",
+        baseUrl: "https://aiproxy.usw-1.sealos.io/v1",
+        apiKeyEnv: "OPEN_AI_API_KEY",
+        models: [
+          { id: "gpt-5.5", type: "openai-chat-compatible", kind: "llm" },
+          { id: "gpt-4o-mini-transcribe", kind: "asr" },
+        ],
+      };
+      const geminiProvider: ProviderProfile = {
+        id: "aiproxy-gemini",
+        name: "AI Proxy Gemini",
+        type: "gemini",
+        baseUrl: "https://aiproxy.usw-1.sealos.io/v1beta",
+        apiKeyEnv: "GEMINI_API_KEY",
+        models: [
+          { id: "gemini-3.5-flash", kind: "llm" },
+          { id: "gemini-3.1-flash-image-preview", kind: "image_generation" },
+        ],
+      };
+      const dashscopeProvider: ProviderProfile = {
+        id: "aiproxy-dashscope",
+        name: "AI Proxy DashScope",
+        type: "dashscope",
+        baseUrl: "https://aiproxy.usw-1.sealos.io/dashscope",
+        apiKeyEnv: "DASHSCOPE_API_KEY",
+        models: [
+          { id: "qwen3-tts-flash", kind: "tts" },
+          { id: "text-embedding-v4", kind: "embedding" },
+        ],
+      };
+
+      process.env.OPEN_AI_API_KEY = "sk-aiproxy";
+      process.env.GEMINI_API_KEY = "sk-aiproxy";
+      process.env.DASHSCOPE_API_KEY = "sk-aiproxy";
+      await cowagent.apply(await cowagent.planApplySlots!({
+        slots: [
+          { slot: "main", provider: openAIProvider, modelId: "gpt-5.5" },
+          { slot: "vision", provider: geminiProvider, modelId: "gemini-3.5-flash" },
+          { slot: "image", provider: geminiProvider, modelId: "gemini-3.1-flash-image-preview" },
+          { slot: "asr", provider: openAIProvider, modelId: "gpt-4o-mini-transcribe" },
+          { slot: "tts", provider: dashscopeProvider, modelId: "qwen3-tts-flash" },
+          { slot: "embedding", provider: dashscopeProvider, modelId: "text-embedding-v4" },
+        ],
+      }));
+
+      const parsed = JSON.parse(await readFile(join(home, "CowAgent/config.json"), "utf8"));
+      expect(parsed.tools.vision).toEqual({ provider: "gemini", model: "gemini-3.5-flash" });
+      expect(parsed.skills["image-generation"]).toEqual({ provider: "gemini", model: "gemini-3.1-flash-image-preview" });
+      expect(parsed.text_to_voice).toBe("dashscope");
+      expect(parsed.text_to_voice_model).toBe("qwen3-tts-flash");
+      expect(parsed.embedding_provider).toBe("dashscope");
+      expect(parsed.embedding_model).toBe("text-embedding-v4");
+      expect(parsed.gemini_api_base).toBe("https://aiproxy.usw-1.sealos.io/v1beta");
+      expect(parsed.gemini_api_key).toBe("sk-aiproxy");
+      expect(parsed.dashscope_api_base).toBe("https://aiproxy.usw-1.sealos.io/dashscope");
+      expect(parsed.dashscope_api_key).toBe("sk-aiproxy");
+      expect(parsed.ai_agent_switch.slots).toEqual({
+        main: { provider: "aiproxy-openai", model: "gpt-5.5" },
+        vision: { provider: "aiproxy-gemini", model: "gemini-3.5-flash" },
+        image: { provider: "aiproxy-gemini", model: "gemini-3.1-flash-image-preview" },
+        asr: { provider: "aiproxy-openai", model: "gpt-4o-mini-transcribe" },
+        tts: { provider: "aiproxy-dashscope", model: "qwen3-tts-flash" },
+        embedding: { provider: "aiproxy-dashscope", model: "text-embedding-v4" },
+      });
+    } finally {
+      delete process.env.OPEN_AI_API_KEY;
+      delete process.env.GEMINI_API_KEY;
+      delete process.env.DASHSCOPE_API_KEY;
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test("cowagent adapter maps OpenAI TTS models to CowAgent audio config", async () => {
     const home = await mkdtemp(join(tmpdir(), "ai-agent-switch-cowagent-openai-tts-"));
     try {
