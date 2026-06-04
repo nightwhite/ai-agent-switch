@@ -758,7 +758,7 @@ describe("extended client adapters", () => {
         id: "aiproxy-dashscope",
         name: "AI Proxy DashScope",
         type: "dashscope",
-        baseUrl: "https://aiproxy.usw-1.sealos.io/dashscope",
+        baseUrl: "https://aiproxy.usw-1.sealos.io",
         apiKeyEnv: "DASHSCOPE_API_KEY",
         models: [
           { id: "qwen3-tts-flash", kind: "tts" },
@@ -787,9 +787,9 @@ describe("extended client adapters", () => {
       expect(parsed.text_to_voice_model).toBe("qwen3-tts-flash");
       expect(parsed.embedding_provider).toBe("dashscope");
       expect(parsed.embedding_model).toBe("text-embedding-v4");
-      expect(parsed.gemini_api_base).toBe("https://aiproxy.usw-1.sealos.io/v1beta");
+      expect(parsed.gemini_api_base).toBe("https://aiproxy.usw-1.sealos.io");
       expect(parsed.gemini_api_key).toBe("sk-aiproxy");
-      expect(parsed.dashscope_api_base).toBe("https://aiproxy.usw-1.sealos.io/dashscope");
+      expect(parsed.dashscope_api_base).toBe("https://aiproxy.usw-1.sealos.io");
       expect(parsed.dashscope_api_key).toBe("sk-aiproxy");
       expect(parsed.ai_agent_switch.slots).toEqual({
         main: { provider: "aiproxy-openai", model: "gpt-5.5" },

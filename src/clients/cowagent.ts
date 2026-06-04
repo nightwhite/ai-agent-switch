@@ -401,8 +401,10 @@ function buildCowAgentLiveApply(slots: ApplyClientSlotsInput["slots"]): CowAgent
 function cowAgentApiBase(provider: ProviderProfile, fields: CowAgentProviderFields): string | undefined {
   const baseUrl = provider.baseUrl?.trim();
   if (!fields.apiBaseKey || !baseUrl) return undefined;
-  if (fields.botType !== "claudeAPI" || !isAIProxyProvider(provider, baseUrl)) return baseUrl;
-  return normalizeAIProxyAnthropicBaseUrl(baseUrl);
+  if (!isAIProxyProvider(provider, baseUrl)) return baseUrl;
+  if (fields.botType === "gemini") return normalizeAIProxyGeminiBaseUrl(baseUrl);
+  if (fields.botType === "claudeAPI") return normalizeAIProxyAnthropicBaseUrl(baseUrl);
+  return baseUrl;
 }
 
 function isAIProxyProvider(provider: ProviderProfile, baseUrl: string): boolean {
@@ -412,6 +414,17 @@ function isAIProxyProvider(provider: ProviderProfile, baseUrl: string): boolean 
   } catch {
     return false;
   }
+}
+
+function normalizeAIProxyGeminiBaseUrl(baseUrl: string): string {
+  const url = new URL(baseUrl);
+  if (url.pathname.replace(/\/+$/, "") === "/v1beta") {
+    url.pathname = "";
+    url.search = "";
+    url.hash = "";
+    return url.toString().replace(/\/$/, "");
+  }
+  return baseUrl;
 }
 
 function normalizeAIProxyAnthropicBaseUrl(baseUrl: string): string {
